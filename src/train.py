@@ -1,215 +1,81 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
-import cv2 as cv
+import cv2
 import os
-import re
-import random
-from utilities import projection
-from glob import glob
 from tqdm import tqdm
-
-from sklearn.utils import shuffle
-from sklearn.model_selection  import train_test_split
-from sklearn import svm
-from sklearn.neural_network import MLPClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.metrics import accuracy_score
-import pickle
+from myModel import EfficientNetRNNModel
 
 chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف',
-'ق','ك', 'ل', 'م', 'ن', 'ه', 'و','ي','لا']
-train_ratio = 0.8
-script_path = os.getcwd()
-classifiers = [ svm.LinearSVC(),
-                MLPClassifier(alpha=1e-4, hidden_layer_sizes=(100,), max_iter=1000),
-                MLPClassifier(alpha=1e-5, hidden_layer_sizes=(200, 100,), max_iter=1000),
-                GaussianNB()]
+         'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي', 'لا']
 
-names = ['LinearSVM', '1L_NN', '2L_NN', 'Gaussian_Naive_Bayes']
-skip = [1, 0, 1, 1]
-
-width = 25
-height = 25
-dim = (width, height)
-
-
-def bound_box(img_char):
-    HP = projection(img_char, 'horizontal')
-    VP = projection(img_char, 'vertical')
-
-    top = -1
-    down = -1
-    left = -1
-    right = -1
-
-    i = 0
-    while i < len(HP):
-        if HP[i] != 0:
-            top = i
-            break
-        i += 1
-
-    i = len(HP)-1
-    while i >= 0:
-        if HP[i] != 0:
-            down = i
-            break
-        i -= 1
-
-    i = 0
-    while i < len(VP):
-        if VP[i] != 0:
-            left = i
-            break
-        i += 1
-
-    i = len(VP)-1
-    while i >= 0:
-        if VP[i] != 0:
-            right = i
-            break
-        i -= 1
-
-    return img_char[top:down+1, left:right+1]
-
-
-def binarize(char_img):
-    _, binary_img = cv.threshold(char_img, 127, 255, cv.THRESH_BINARY)
-    # _, binary_img = cv.threshold(word_img, 0, 255, cv.THRESH_BINARY+cv.THRESH_OTSU)
-    binary_char = binary_img // 255
-
-    return binary_char
-
-
-def prepare_char(char_img):
-
-    binary_char = binarize(char_img)
-
-    try:
-        char_box = bound_box(binary_char)
-        resized = cv.resize(char_box, dim, interpolation = cv.INTER_AREA)
-    except:
-        pass
-
-    return resized
-
-
-def featurizer(char_img):
-
-    flat_char = char_img.flatten()
-
-    return flat_char
-
-
-def read_data(limit=4000):
-
+def read_data(dataset_path, image_size=(25, 25)):
     X = []
     Y = []
-    print("For each char")
-    for char in tqdm(chars, total=len(chars)):
-
-        folder = f'../Dataset/char_sample/{char}'
-        char_paths =  glob(f'../Dataset/char_sample/{char}/*.png')
-
-        if os.path.exists(folder):
-            os.chdir(folder)
-
-            print(f'\nReading images for char {char}')
-            for char_path in tqdm(char_paths[:limit], total=len(char_paths)):
-                num = re.findall(r'\d+', char_path)[0]
-                char_img = cv.imread(f'{num}.png', 0)
-                ready_char = prepare_char(char_img)
-                feature_vector = featurizer(ready_char)
-                # X.append(char)
-                X.append(feature_vector)
+    for char in tqdm(os.listdir(dataset_path)):
+        char_folder = os.path.join(dataset_path, char)
+        if os.path.isdir(char_folder):
+            for image_path in glob(f"{char_folder}/*.png"):
+                img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
+                img_resized = cv2.resize(img, image_size)
+                X.append(img_resized)
                 Y.append(char)
+    return np.array(X), np.array(Y)
 
-            os.chdir(script_path)
-            
-    return X, Y
+
+checkpoint_path = "/content/drive/MyDrive/Saved_Models/new_save_model_rnn_eff_92.pth"
+model = EfficientNetRNNModel(num_classes=len(chars))  # Adjust num_classes to your character set size
+model = model.to('cuda' if torch.cuda.is_available() else 'cpu')  # Move model to GPU if available
+
+if os.path.exists(checkpoint_path):
+    print("Loading pretrained weights...")
+    model.load_state_dict(torch.load(checkpoint_path))
+else:
+    print("Pretrained model not found. Training from scratch.")
 
 
 def train():
+    dataset_path = '/content/Dhad/Dhad_Dataset'
+    X, Y = read_data(dataset_path)
+    X = torch.tensor(X).float().unsqueeze(1)  # Add channel dimension
+    Y = torch.tensor([chars.index(y) for y in Y])  # Convert labels to indices
 
-    X, Y = read_data()
-    assert(len(X) == len(Y))
+    # Train/test split
+    train_size = int(0.8 * len(X))
+    X_train, Y_train = X[:train_size], Y[:train_size]
+    X_test, Y_test = X[train_size:], Y[train_size:]
 
-    X, Y = shuffle(X, Y)
+    # DataLoader
+    train_loader = DataLoader(TensorDataset(X_train, Y_train), batch_size=32, shuffle=True)
+    test_loader = DataLoader(TensorDataset(X_test, Y_test), batch_size=32, shuffle=False)
 
-    X_train = []
-    Y_train = []
-    X_test = []
-    Y_test = []
+    # Model, loss, and optimizer
+    model = EfficientNetRNNModel(num_classes=len(chars))
+    model = model.to('cuda' if torch.cuda.is_available() else 'cpu')
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-    X_train, X_test, Y_train, Y_test = train_test_split(X, Y, train_size=0.8)
-    
-    X_train = np.array(X_train)
-    Y_train = np.array(Y_train)
-    X_test = np.array(X_test)
-    Y_test = np.array(Y_test)
+    # Training loop
+    model.train()
+    for epoch in range(10):
+        epoch_loss = 0
+        for batch_x, batch_y in train_loader:
+            batch_x, batch_y = batch_x.to('cuda'), batch_y.to('cuda')
 
-    scores = []
-    for idx, clf in tqdm(enumerate(classifiers), desc='Classifiers'):
+            optimizer.zero_grad()
+            outputs = model(batch_x)
+            loss = criterion(outputs, batch_y)
+            loss.backward()
+            optimizer.step()
 
-        if not skip[idx]:
+            epoch_loss += loss.item()
 
-            clf.fit(X_train, Y_train)
-            score = clf.score(X_test, Y_test)
-            scores.append(score)
-            print(score)
+        print(f'Epoch {epoch+1}, Loss: {epoch_loss / len(train_loader)}')
 
-            # Save the model
-            destination = f'models'
-            if not os.path.exists(destination):
-                os.makedirs(destination)
-            
-            location = f'models/{names[idx]}.sav'
-            pickle.dump(clf, open(location, 'wb'))
-
-
-    with open('models/report.txt', 'w') as fo:
-        for score, name in zip(scores, names):
-            fo.writelines(f'Score of {name}: {score}\n')
-
-
-def test(limit=3000):
-
-    location = f'models/{names[0]}.sav'
-    clf = pickle.load(open(location, 'rb'))
-     
-    X = []
-    Y = []
-    tot = 0
-    for char in tqdm(chars, total=len(chars)):
-
-        folder = f'../Dataset/char_sample/{char}'
-        char_paths =  glob(f'../Dataset/char_sample/{char}/*.png')
-
-
-        if os.path.exists(folder):
-            os.chdir(folder)
-
-            print(f'\nReading images for char {char}')
-            tot += len(char_paths) - limit
-            for char_path in tqdm(char_paths[limit:], total=len(char_paths)):
-                num = re.findall(r'\d+', char_path)[0]
-                char_img = cv.imread(f'{num}.png', 0)
-                ready_char = prepare_char(char_img)
-                feature_vector = featurizer(ready_char)
-                # X.append(char)
-                X.append(feature_vector)
-                Y.append(char)
-
-            os.chdir(script_path)
-    
-    cnt = 0
-    for x, y in zip(X, Y):
-
-        c = clf.predict([x])[0]
-        if c == y:
-            cnt += 1
-
+    # Save model
+    torch.save(model.state_dict(), '/content/drive/MyDrive/Saved_Models/new_model.pth')
 
 if __name__ == "__main__":
-
     train()
-    # test()
