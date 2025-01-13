@@ -8,33 +8,31 @@ from segmentation import extract_words
 from train import prepare_char, featurizer
 import pickle
 import multiprocessing as mp
-from myModel import EfficientNetRNNModel
 
-#model_name = '2L_NN.sav'
+model_name = '2L_NN.sav'
 def load_model():
-    
-    model_path = "/content/drive/MyDrive/Saved_Models/new_save_model_rnn_eff_92.pth"
-    model = EfficientNetRNNModel(num_classes=29)  # Adjust num_classes
-    model.load_state_dict(torch.load(model_path))
-    model.eval()
-    return model
-
+    location = 'models'
+    if os.path.exists(location):
+        model = pickle.load(open(f'models/{model_name}', 'rb'))
+        return model
         
 def run2(obj):
     word, line = obj
     model = load_model()
+    # For each word in the image
     char_imgs = segment(line, word)
     txt_word = ''
+    # For each character in the word
     for char_img in char_imgs:
         try:
             ready_char = prepare_char(char_img)
-            ready_char_tensor = torch.tensor(ready_char).unsqueeze(0).unsqueeze(0).float()
-            predicted_char = model(ready_char_tensor).argmax(dim=1).item()
-            txt_word += chars[predicted_char]
         except:
+            # breakpoint()
             continue
+        feature_vector = featurizer(ready_char)
+        predicted_char = model.predict([feature_vector])[0]
+        txt_word += predicted_char
     return txt_word
-
 
 
 def run(image_path):

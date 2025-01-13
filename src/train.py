@@ -1,128 +1,215 @@
-##########last train.py
-import os
-import cv2
-import torch
 import numpy as np
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
+import cv2 as cv
+import os
+import re
+import random
+from utilities import projection
 from glob import glob
 from tqdm import tqdm
-from myModel import EfficientNetRNNModel  # Import your custom model
-checkpoint_path = "/content/drive/MyDrive/Saved_Models/new_save_model_rnn_eff_92.pth"
-model = EfficientNetRNNModel(num_classes=29)  # Adjust num_classes to match your character set size
-model = model.to('cuda' if torch.cuda.is_available() else 'cpu')
-if os.path.exists(checkpoint_path):
-    print("Loading pretrained weights...")
-    state_dict = torch.load(checkpoint_path)
-    
-    # Filter the state_dict to include only keys that exist in the current model
-    filtered_state_dict = {k: v for k, v in state_dict.items() if k in model.state_dict()}
-    model.load_state_dict(filtered_state_dict, strict=False)  # Allow partial loading
-else:
-    print("Pretrained model not found. Training from scratch.")
-# Load pretrained model
-#checkpoint_path = "/content/drive/MyDrive/Saved_Models/new_save_model_rnn_eff_92.pth"
-#model = EfficientNetRNNModel(num_classes=29)  # Adjust num_classes to match your character set size
-#model = model.to('cuda' if torch.cuda.is_available() else 'cpu')
 
-#if os.path.exists(checkpoint_path):
-    #print("Loading pretrained weights...")
-    #state_dict = torch.load(checkpoint_path)
-    #model.load_state_dict(state_dict, strict=False)
-    # Remove `classifier` keys
-    #filtered_state_dict = {k: v for k, v in state_dict.items() if not k.startswith("classifier")}
-    #model.load_state_dict(filtered_state_dict, strict=False)
-#else:
-    #print("Pretrained model not found. Training from scratch.")
+from sklearn.utils import shuffle
+from sklearn.model_selection  import train_test_split
+from sklearn import svm
+from sklearn.neural_network import MLPClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.metrics import accuracy_score
+import pickle
 
-# Define optimizer and loss
-optimizer = optim.Adam(model.parameters(), lr=0.001)
-criterion = nn.CrossEntropyLoss()
+chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف',
+'ق','ك', 'ل', 'م', 'ن', 'ه', 'و','ي','لا']
+train_ratio = 0.8
+script_path = os.getcwd()
+classifiers = [ svm.LinearSVC(),
+                MLPClassifier(alpha=1e-4, hidden_layer_sizes=(100,), max_iter=1000),
+                MLPClassifier(alpha=1e-5, hidden_layer_sizes=(200, 100,), max_iter=1000),
+                GaussianNB()]
 
-def read_data(dataset_path, image_size=(25, 25)):
+names = ['LinearSVM', '1L_NN', '2L_NN', 'Gaussian_Naive_Bayes']
+skip = [1, 0, 1, 1]
+
+width = 25
+height = 25
+dim = (width, height)
+
+
+def bound_box(img_char):
+    HP = projection(img_char, 'horizontal')
+    VP = projection(img_char, 'vertical')
+
+    top = -1
+    down = -1
+    left = -1
+    right = -1
+
+    i = 0
+    while i < len(HP):
+        if HP[i] != 0:
+            top = i
+            break
+        i += 1
+
+    i = len(HP)-1
+    while i >= 0:
+        if HP[i] != 0:
+            down = i
+            break
+        i -= 1
+
+    i = 0
+    while i < len(VP):
+        if VP[i] != 0:
+            left = i
+            break
+        i += 1
+
+    i = len(VP)-1
+    while i >= 0:
+        if VP[i] != 0:
+            right = i
+            break
+        i -= 1
+
+    return img_char[top:down+1, left:right+1]
+
+
+def binarize(char_img):
+    _, binary_img = cv.threshold(char_img, 127, 255, cv.THRESH_BINARY)
+    # _, binary_img = cv.threshold(word_img, 0, 255, cv.THRESH_BINARY+cv.THRESH_OTSU)
+    binary_char = binary_img // 255
+
+    return binary_char
+
+
+def prepare_char(char_img):
+
+    binary_char = binarize(char_img)
+
+    try:
+        char_box = bound_box(binary_char)
+        resized = cv.resize(char_box, dim, interpolation = cv.INTER_AREA)
+    except:
+        pass
+
+    return resized
+
+
+def featurizer(char_img):
+
+    flat_char = char_img.flatten()
+
+    return flat_char
+
+
+def read_data(limit=4000):
+
     X = []
     Y = []
-    chars = sorted(os.listdir(dataset_path))  # Ensure consistent indexing of character classes
-    char_to_index = {char: idx for idx, char in enumerate(chars)}
-  
-    print(f"Loading data from {dataset_path}...")
+    print("For each char")
     for char in tqdm(chars, total=len(chars)):
-        char_folder = os.path.join(dataset_path, char)
-        if os.path.isdir(char_folder):
-            images = glob(f"{char_folder}/*.png")
-            for image_path in images:
-                img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
-                img_resized = cv2.resize(img, image_size)
 
-                # Convert grayscale to 3-channel RGB
-                img_rgb = cv2.merge([img_resized, img_resized, img_resized])
+        folder = f'../Dataset/char_sample/{char}'
+        char_paths =  glob(f'../Dataset/char_sample/{char}/*.png')
 
-                X.append(img_rgb)
-                Y.append(char_to_index[char])  # Convert character to index
+        if os.path.exists(folder):
+            os.chdir(folder)
 
-    X = np.array(X).reshape(-1, 3, *image_size) / 255.0  # Normalize images
-    Y = np.array(Y)
+            print(f'\nReading images for char {char}')
+            for char_path in tqdm(char_paths[:limit], total=len(char_paths)):
+                num = re.findall(r'\d+', char_path)[0]
+                char_img = cv.imread(f'{num}.png', 0)
+                ready_char = prepare_char(char_img)
+                feature_vector = featurizer(ready_char)
+                # X.append(char)
+                X.append(feature_vector)
+                Y.append(char)
+
+            os.chdir(script_path)
+            
     return X, Y
 
 
-# Define `num_classes` after determining the characters
-chars = sorted(os.listdir("/content/Dhad/Dhad_Dataset/train"))  # Character folders
-num_classes = len(chars)  # Total number of classes
-
-# Updated model initialization to use `num_classes`
-model = EfficientNetRNNModel(num_classes=num_classes)
-model = model.to('cuda' if torch.cuda.is_available() else 'cpu')
-
-# Update dataset validation
 def train():
-    # Paths to train and test directories
-    train_dataset_path = "/content/Dhad/Dhad_Dataset/train"
-    test_dataset_path = "/content/Dhad/Dhad_Dataset/test"
 
-    # Load training and testing data
-    X_train, Y_train = read_data(train_dataset_path)
-    X_test, Y_test = read_data(test_dataset_path)
+    X, Y = read_data()
+    assert(len(X) == len(Y))
 
-    # Validate dataset labels
-    print("Unique train labels:", np.unique(Y_train))
-    print("Unique test labels:", np.unique(Y_test))
+    X, Y = shuffle(X, Y)
+
+    X_train = []
+    Y_train = []
+    X_test = []
+    Y_test = []
+
+    X_train, X_test, Y_train, Y_test = train_test_split(X, Y, train_size=0.8)
     
-    # Ensure labels are in the range [0, num_classes-1]
-    if np.any(Y_train < 0) or np.any(Y_train >= num_classes):
-        raise ValueError(f"Train labels are out of range [0, {num_classes-1}]")
+    X_train = np.array(X_train)
+    Y_train = np.array(Y_train)
+    X_test = np.array(X_test)
+    Y_test = np.array(Y_test)
 
-    if np.any(Y_test < 0) or np.any(Y_test >= num_classes):
-        raise ValueError(f"Test labels are out of range [0, {num_classes-1}]")
+    scores = []
+    for idx, clf in tqdm(enumerate(classifiers), desc='Classifiers'):
 
-    train_dataset = TensorDataset(torch.tensor(X_train).float(), torch.tensor(Y_train).long())
-    test_dataset = TensorDataset(torch.tensor(X_test).float(), torch.tensor(Y_test).long())
+        if not skip[idx]:
 
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=32, shuffle=False)
+            clf.fit(X_train, Y_train)
+            score = clf.score(X_test, Y_test)
+            scores.append(score)
+            print(score)
 
-    # Training loop
-    for epoch in range(10):  # Adjust the number of epochs
-        model.train()
-        running_loss = 0.0
-        for inputs, labels in train_loader:
-            print("Inputs shape:", inputs.shape)
-            print("Labels shape:", labels.shape)
+            # Save the model
+            destination = f'models'
+            if not os.path.exists(destination):
+                os.makedirs(destination)
+            
+            location = f'models/{names[idx]}.sav'
+            pickle.dump(clf, open(location, 'wb'))
 
-            # Ensure inputs have 3 channels and expected image size
-            if inputs.shape[1] != 3:
-                raise ValueError(f"Expected 3 channels, but got {inputs.shape[1]} channels.")
 
-            # Ensure labels match the batch size
-            if labels.shape[0] != inputs.shape[0]:
-                raise ValueError(f"Mismatch between input batch size {inputs.shape[0]} and labels batch size {labels.shape[0]}.")
+    with open('models/report.txt', 'w') as fo:
+        for score, name in zip(scores, names):
+            fo.writelines(f'Score of {name}: {score}\n')
 
-            #break  # Check only the first batch
 
-    # Save trained model
-    torch.save(model.state_dict(), "/content/drive/MyDrive/Saved_Models/trained_effnet_rnn.pth")
-    print("Model saved successfully!")
+def test(limit=3000):
+
+    location = f'models/{names[0]}.sav'
+    clf = pickle.load(open(location, 'rb'))
+     
+    X = []
+    Y = []
+    tot = 0
+    for char in tqdm(chars, total=len(chars)):
+
+        folder = f'../Dataset/char_sample/{char}'
+        char_paths =  glob(f'../Dataset/char_sample/{char}/*.png')
+
+
+        if os.path.exists(folder):
+            os.chdir(folder)
+
+            print(f'\nReading images for char {char}')
+            tot += len(char_paths) - limit
+            for char_path in tqdm(char_paths[limit:], total=len(char_paths)):
+                num = re.findall(r'\d+', char_path)[0]
+                char_img = cv.imread(f'{num}.png', 0)
+                ready_char = prepare_char(char_img)
+                feature_vector = featurizer(ready_char)
+                # X.append(char)
+                X.append(feature_vector)
+                Y.append(char)
+
+            os.chdir(script_path)
+    
+    cnt = 0
+    for x, y in zip(X, Y):
+
+        c = clf.predict([x])[0]
+        if c == y:
+            cnt += 1
 
 
 if __name__ == "__main__":
+
     train()
+    # test()
