@@ -32,13 +32,14 @@ class ArabicCharDataset(Dataset):
         return len(self.char_paths)
 
     def __getitem__(self, idx):
-        char_img = cv.imread(self.char_paths[idx], 0)
+        char_img_path = self.data[idx]
+        print(f"Loading image: {char_img_path}")  # Debug the file path
+        char_img = cv.imread(char_img_path, cv.IMREAD_GRAYSCALE)
+        if char_img is None:
+          raise ValueError(f"Failed to load image at path: {char_img_path}")
         ready_char = prepare_char(char_img)  # Resize to (224, 224)
-        label = self.labels[idx]
-        if self.transform:
-            ready_char = self.transform(ready_char)
-        ready_char = torch.tensor(ready_char, dtype=torch.float32).unsqueeze(0)  # Add channel dimension
-        return ready_char, label
+        return ready_char, self.labels[idx]
+
 ######################################################
 chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف',
 'ق','ك', 'ل', 'م', 'ن', 'ه', 'و','ي','لا']
@@ -245,7 +246,7 @@ def test(limit=3000):
 #####################################################################
 
 def create_dataloaders(data_dir, chars, batch_size=32, limit=4000, transform=None):
-    dataset = ArabicCharDataset(data_dir, chars, transform=transform, limit=limit)
+    dataset = ArabicCharDataset(data_dir, chars, transform=transform)
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, test_size])
