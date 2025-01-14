@@ -1,20 +1,23 @@
-############################## my Model.py
 import torch
 import torch.nn as nn
 from torchvision import models
+from torchvision.models import efficientnet_b0, EfficientNet_B0_Weights
 import torch.optim as optim
-from sklearn.base import BaseEstimator, ClassifierMixin
-import numpy as np
 from torchvision import transforms
+# BaseEstimator and ClassifierMixin for scikit-learn compatibility
+from sklearn.base import BaseEstimator, ClassifierMixin
 
-chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي']
+# EfficientNetLSTMModel - this should already be defined in the same file
+# Ensure the EfficientNetLSTMModel class is defined before you use it in your code
 
+chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف',
+'ق','ك', 'ل', 'م', 'ن', 'ه', 'و','ي','لا']
 class EfficientNetLSTMModel(nn.Module):
     def __init__(self, num_classes, lstm_hidden_size=128, num_lstm_layers=1):
         super(EfficientNetLSTMModel, self).__init__()
 
         # Load EfficientNet B0 as feature extractor
-        efficientnet = models.efficientnet_b0(pretrained=True)
+        efficientnet = efficientnet_b0(weights=EfficientNet_B0_Weights.IMAGENET1K_V1)
 
         # Remove the last fully connected layer, we only need the feature extractor
         self.feature_extractor = nn.Sequential(*list(efficientnet.children())[:-2])
@@ -53,10 +56,10 @@ class EfficientNetLSTMModel(nn.Module):
 
       return x
 
-
-
 class EfficientNetLSTMClassifier(BaseEstimator, ClassifierMixin):
-    def __init__(self, num_classes=29, lstm_hidden_size=128, num_lstm_layers=1, learning_rate=0.001, epochs=10, batch_size=32, device='cuda' if torch.cuda.is_available() else 'cpu'):
+    def __init__(self, num_classes=29, lstm_hidden_size=128, num_lstm_layers=1, 
+                 learning_rate=0.001, epochs=10, batch_size=32, 
+                 device='cuda' if torch.cuda.is_available() else 'cpu'):
         self.num_classes = num_classes
         self.lstm_hidden_size = lstm_hidden_size
         self.num_lstm_layers = num_lstm_layers
@@ -69,40 +72,74 @@ class EfficientNetLSTMClassifier(BaseEstimator, ClassifierMixin):
         self.model = EfficientNetLSTMModel(num_classes=num_classes, lstm_hidden_size=lstm_hidden_size, num_lstm_layers=num_lstm_layers).to(self.device)
         self.criterion = nn.CrossEntropyLoss()
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
-        self.transform = transforms.Compose([transforms.ToTensor(), transforms.Resize((224, 224))])  # Assuming input size 224x224 for EfficientNet
+        self.transform = transforms.Compose([transforms.ToTensor(), transforms.Resize((224, 224))])
 
-    def fit(self, X, y):
-        X = np.array(X)
-        y = np.array(y)
-
-        # Convert data to PyTorch tensors
-        X_tensor = torch.stack([self.transform(img.reshape(25, 25)) for img in X]).to(self.device)
-        y_tensor = torch.tensor([chars.index(label) for label in y], dtype=torch.long).to(self.device)
-
-        # Training loop
+    def fit(self, train_loader, test_loader=None):
+        """
+        Train the model using DataLoader objects.
+        Args:
+            train_loader (DataLoader): DataLoader for training data.
+            test_loader (DataLoader, optional): DataLoader for validation data.
+        """
         self.model.train()
+
         for epoch in range(self.epochs):
-            permutation = torch.randperm(X_tensor.size(0))
             epoch_loss = 0
+            for batch_idx, (images, labels) in enumerate(train_loader):
+                images = images.to(self.device)
+                labels = torch.tensor([chars.index(label) for label in labels], dtype=torch.long).to(self.device)
 
-            for i in range(0, X_tensor.size(0), self.batch_size):
-                indices = permutation[i:i+self.batch_size]
-                batch_X, batch_y = X_tensor[indices], y_tensor[indices]
-
+                # Forward pass
                 self.optimizer.zero_grad()
-                outputs = self.model(batch_X)
-                loss = self.criterion(outputs, batch_y)
+                outputs = self.model(images)
+                loss = self.criterion(outputs, labels)
+
+                # Backward pass and optimization
                 loss.backward()
                 self.optimizer.step()
-
                 epoch_loss += loss.item()
 
-            print(f"Epoch {epoch+1}/{self.epochs}, Loss: {epoch_loss / len(X_tensor)}")
+            print(f"Epoch {epoch+1}/{self.epochs}, Loss: {epoch_loss / len(train_loader)}")
 
-    def predict(self, X):
-        X_tensor = torch.stack([self.transform(img.reshape(25, 25)) for img in X]).to(self.device)
+            # Optional validation
+            if test_loader:
+                self.evaluate(test_loader)
+
+    def evaluate(self, test_loader):
+        """
+        Evaluate the model on a validation/test DataLoader.
+        """
         self.model.eval()
+        correct = 0
+        total = 0
         with torch.no_grad():
-            outputs = self.model(X_tensor)
-            _, predicted = torch.max(outputs, 1)
-        return [chars[pred.item()] for pred in predicted]
+            for images, labels in test_loader:
+                images = images.to(self.device)
+                labels = torch.tensor([chars.index(label) for label in labels], dtype=torch.long).to(self.device)
+
+                outputs = self.model(images)
+                _, predicted = torch.max(outputs, 1)
+                correct += (predicted == labels).sum().item()
+                total += labels.size(0)
+
+        accuracy = 100 * correct / total
+        print(f"Validation Accuracy: {accuracy:.2f}%")
+        return accuracy
+
+    def predict(self, test_loader):
+        """
+        Predict the labels for a test DataLoader.
+        Args:
+            test_loader (DataLoader): DataLoader for test data.
+        Returns:
+            list: Predicted labels for the entire dataset.
+        """
+        self.model.eval()
+        predictions = []
+        with torch.no_grad():
+            for images, _ in test_loader:  # Ignore true labels during prediction
+                images = images.to(self.device)
+                outputs = self.model(images)
+                _, predicted = torch.max(outputs, 1)
+                predictions.extend([chars[pred.item()] for pred in predicted])
+        return predictions
