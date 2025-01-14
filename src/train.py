@@ -1,3 +1,4 @@
+############################# train.py
 import numpy as np
 import cv2 as cv
 import os
@@ -6,6 +7,7 @@ import random
 from utilities import projection
 from glob import glob
 from tqdm import tqdm
+from myModel import EfficientNetLSTMClassifier
 
 from sklearn.utils import shuffle
 from sklearn.model_selection  import train_test_split
@@ -19,13 +21,17 @@ chars = ['ا', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س',
 'ق','ك', 'ل', 'م', 'ن', 'ه', 'و','ي','لا']
 train_ratio = 0.8
 script_path = os.getcwd()
-classifiers = [ svm.LinearSVC(),
-                MLPClassifier(alpha=1e-4, hidden_layer_sizes=(100,), max_iter=1000),
-                MLPClassifier(alpha=1e-5, hidden_layer_sizes=(200, 100,), max_iter=1000),
-                GaussianNB()]
+classifiers = [
+    svm.LinearSVC(),
+    MLPClassifier(alpha=1e-4, hidden_layer_sizes=(100,), max_iter=1000),
+    MLPClassifier(alpha=1e-5, hidden_layer_sizes=(200, 100,), max_iter=1000),
+    GaussianNB(),
+    EfficientNetLSTMClassifier(epochs=5, batch_size=32, learning_rate=0.001)
+]
 
-names = ['LinearSVM', '1L_NN', '2L_NN', 'Gaussian_Naive_Bayes']
-skip = [1, 0, 1, 1]
+names = ['LinearSVM', '1L_NN', '2L_NN', 'Gaussian_Naive_Bayes', 'EfficientNetLSTM']
+skip = [1, 0, 1, 1, 0]
+
 
 width = 25
 height = 25
@@ -81,15 +87,12 @@ def binarize(char_img):
 
 
 def prepare_char(char_img):
-
     binary_char = binarize(char_img)
-
     try:
         char_box = bound_box(binary_char)
-        resized = cv.resize(char_box, dim, interpolation = cv.INTER_AREA)
+        resized = cv.resize(char_box, (224, 224), interpolation=cv.INTER_AREA)
     except:
-        pass
-
+        resized = np.zeros((224, 224))  # Return a blank image if resizing fails
     return resized
 
 
@@ -124,7 +127,7 @@ def read_data(limit=4000):
                 Y.append(char)
 
             os.chdir(script_path)
-            
+
     return X, Y
 
 
@@ -141,7 +144,7 @@ def train():
     Y_test = []
 
     X_train, X_test, Y_train, Y_test = train_test_split(X, Y, train_size=0.8)
-    
+
     X_train = np.array(X_train)
     Y_train = np.array(Y_train)
     X_test = np.array(X_test)
@@ -152,37 +155,38 @@ def train():
 
         if not skip[idx]:
 
+            print(f"Training {names[idx]}...")
             clf.fit(X_train, Y_train)
             score = clf.score(X_test, Y_test)
             scores.append(score)
-            print(score)
+            print(f"Score of {names[idx]}: {score}")
 
             # Save the model
             destination = f'models'
             if not os.path.exists(destination):
-                os.makedirs(destination)
-            
-            location = f'models/{names[idx]}.sav'
+              os.makedirs(destination)
+
+            location = f'/content/Arabic-OCR-Hussein/src/models/{names[idx]}.sav'
             pickle.dump(clf, open(location, 'wb'))
 
 
-    with open('models/report.txt', 'w') as fo:
+    with open('/content/Arabic-OCR-Hussein/src/models/report.txt', 'w') as fo:
         for score, name in zip(scores, names):
             fo.writelines(f'Score of {name}: {score}\n')
 
 
 def test(limit=3000):
 
-    location = f'models/{names[0]}.sav'
+    location = f'/content/Arabic-OCR-Hussein/src/models/{names[0]}.sav'
     clf = pickle.load(open(location, 'rb'))
-     
+
     X = []
     Y = []
     tot = 0
     for char in tqdm(chars, total=len(chars)):
 
-        folder = f'../Dataset/char_sample/{char}'
-        char_paths =  glob(f'../Dataset/char_sample/{char}/*.png')
+        folder = f'/content/drive/MyDrive/char_sample/{char}'
+        char_paths =  glob(f'/content/drive/MyDrive/char_sample/{char}/*.png')
 
 
         if os.path.exists(folder):
@@ -200,7 +204,7 @@ def test(limit=3000):
                 Y.append(char)
 
             os.chdir(script_path)
-    
+
     cnt = 0
     for x, y in zip(X, Y):
 
